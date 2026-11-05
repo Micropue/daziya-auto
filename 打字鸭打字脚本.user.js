@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        打字鸭自动打字脚本
 // @namespace   https://docs.scriptcat.org/
-// @version     1.2.1
+// @version     1.2.2
 // @description 你的作业也忘记提交了吗？快试试这个脚本叭！
 // @author      Micropue
 // @match       https://www.daziya.com/*
@@ -94,11 +94,19 @@
     ])
 
     function convert(text) {
-        return [...text.toLowerCase()]
+        return [...text]
             .map(char => {
-                return pinyinMap[char] ??
-                    punctuationMap[char] ??
-                    char
+                const lower = char.toLowerCase()
+                const base = pinyinMap[lower]
+
+                // 保留大写：Ǒ -> O，Ü -> V
+                if (base) {
+                    return char === lower
+                        ? base
+                        : base.toUpperCase()
+                }
+
+                return punctuationMap[char] ?? char
             })
             .filter(char => allowedChars.test(char))
             .join('')
@@ -248,7 +256,7 @@
             keyCode: info.keyCode,
             which: info.keyCode,
             charCode: char.charCodeAt(0),
-            shiftKey: shiftChars.has(char)
+            shiftKey: shiftChars.has(char) || /^[A-Z]$/.test(char)
         }
 
         target.dispatchEvent(
