@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        打字鸭自动打字脚本
 // @namespace   https://docs.scriptcat.org/
-// @version     1.2.2
+// @version     1.3.1
 // @description 你的作业也忘记提交了吗？快试试这个脚本叭！
 // @author      Micropue
 // @match       https://www.daziya.com/*
@@ -18,6 +18,45 @@
     if (window.PinyinTyper) {
         window.PinyinTyper.destroy()
     }
+
+    // 提前挂住小游戏实例，SPA 切到游戏页时才能直接拿到单词
+    function installGameHook() {
+        if (window.__pinyinTyperGameHook) return
+
+        window.__pinyinTyperGameHook = true
+
+        const wrap = factory => options => {
+            const game = factory(options)
+
+            window.__pinyinTyperDuckGame = game
+
+            return game
+        }
+
+        if (typeof window.mountDuckJumpRiverGame === 'function') {
+            window.mountDuckJumpRiverGame = wrap(
+                window.mountDuckJumpRiverGame
+            )
+            return
+        }
+
+        Object.defineProperty(window, 'mountDuckJumpRiverGame', {
+            configurable: true,
+            set(factory) {
+                Object.defineProperty(
+                    window,
+                    'mountDuckJumpRiverGame',
+                    {
+                        configurable: true,
+                        writable: true,
+                        value: wrap(factory)
+                    }
+                )
+            }
+        })
+    }
+
+    installGameHook()
 
     const CONFIG = {
         selector: '.lesson-key-pinyin-code.pinyin-box',
@@ -86,6 +125,9 @@
 
     const allowedChars =
         /^[a-zA-Z0-9,.!?;:'"()[\]{}<>_、…·\-]$/
+
+    // waitForNextContent 用这个标记表示“下一页是小游戏”
+    const GAME_CONTENT = '\u0000__GAME__'
 
     // 这些字符需要按住 Shift
     const shiftChars = new Set([
@@ -185,6 +227,80 @@
         }
 
         return result.join('')
+    }
+
+    // 从 Nuxt 数据里读小游戏的单词表
+    function readGameWords() {
+        const dataScript = document.querySelector('#__NUXT_DATA__')
+
+        if (!dataScript) return []
+
+        let data
+
+        try {
+            data = JSON.parse(dataScript.textContent)
+        } catch {
+            return []
+        }
+
+        if (!Array.isArray(data)) return []
+
+        const resolveText = (value, depth = 0) => {
+            if (depth > 4) return ''
+            if (typeof value === 'string') return value
+            if (typeof value === 'number') {
+                return resolveText(data[value], depth + 1)
+            }
+            if (Array.isArray(value)) {
+                return value
+                    .map(item => resolveText(item, depth + 1))
+                    .filter(Boolean)
+                    .join(' ')
+            }
+            return ''
+        }
+
+        const isGameText = text =>
+            text &&
+            !/[\u4e00-\u9fff]/.test(text) &&
+            /^[\x20-\x7E]+$/.test(text)
+
+        for (const item of data) {
+            if (
+                !item ||
+                typeof item !== 'object' ||
+                Array.isArray(item) ||
+                !('contentType' in item) ||
+                !('text' in item)
+            ) {
+                continue
+            }
+
+            const text = resolveText(item.text).trim()
+
+            if (isGameText(text)) {
+                return text.split(/\s+/).filter(Boolean)
+            }
+        }
+
+        // 兜底：找最长的一串纯英文单词
+        const candidates = data
+            .filter(item =>
+                typeof item === 'string' &&
+                item.includes(' ') &&
+                /^[\x20-\x7E]+$/.test(item)
+            )
+            .sort((a, b) => b.length - a.length)
+
+        return candidates.length
+            ? candidates[0].trim().split(/\s+/).filter(Boolean)
+            : []
+    }
+
+    function isGamePage() {
+        return !!document.querySelector(
+            '.duck-jump-runtime canvas'
+        )
     }
 
     // ==============================
@@ -303,6 +419,36 @@
         await sleep(CONFIG.enterWait)
     }
 
+    // 小游戏只要 keydown，不需要键程
+    function dispatchGameKey(char) {
+        const upper = char.toUpperCase()
+        const info = keyCodeMap[char] || {
+            keyCode: char.length === 1
+                ? upper.charCodeAt(0)
+                : 0,
+            code: /^[a-z]$/i.test(char)
+                ? `Key${upper}`
+                : ''
+        }
+
+        const options = {
+            key: char,
+            code: info.code,
+            keyCode: info.keyCode,
+            which: info.keyCode,
+            charCode: char.charCodeAt(0),
+            shiftKey: shiftChars.has(char) || /^[A-Z]$/.test(char)
+        }
+
+        window.dispatchEvent(
+            createKeyboardEvent('keydown', options)
+        )
+
+        window.dispatchEvent(
+            createKeyboardEvent('keyup', options)
+        )
+    }
+
     // ==============================
     // 全局计时器
     // ==============================
@@ -412,7 +558,7 @@
                 <span class="pt-dot"></span>
                 Pinyin Typer
             </div>
-            <button class="pt-close">×</button>
+            <button class="pt-close" title="隐藏面板">×</button>
         </div>
 
         <div class="pt-status">
@@ -739,10 +885,70 @@
             font-size: 10px;
             margin-top: 14px;
         }
+
+        #pinyin-typer-panel.pt-hidden {
+            display: none;
+        }
+
+        #pinyin-typer-reopen {
+            position: fixed;
+            right: 24px;
+            bottom: 24px;
+            z-index: 999998;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            width: 38px;
+            height: 38px;
+            padding: 0;
+            border: 1px solid rgba(255,255,255,.18);
+            border-radius: 50%;
+            background: rgba(20,24,32,.72);
+            color: #35d99a;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            opacity: .55;
+            box-shadow: 0 6px 24px rgba(0,0,0,.25);
+            backdrop-filter: blur(12px);
+            transition: opacity .15s, transform .15s;
+        }
+
+        #pinyin-typer-reopen.show {
+            display: flex;
+        }
+
+        #pinyin-typer-reopen:hover {
+            opacity: 1;
+            transform: scale(1.05);
+        }
     `
 
     document.head.appendChild(style)
     document.body.appendChild(panel)
+
+    const reopenBtn = document.createElement('button')
+
+    reopenBtn.id = 'pinyin-typer-reopen'
+    reopenBtn.type = 'button'
+    reopenBtn.title = '打开 Pinyin Typer'
+    reopenBtn.setAttribute('aria-label', '打开 Pinyin Typer 面板')
+    reopenBtn.textContent = '鸭'
+
+    document.body.appendChild(reopenBtn)
+
+    function hidePanel() {
+        panel.classList.add('pt-hidden')
+        reopenBtn.classList.add('show')
+    }
+
+    function showPanel() {
+        panel.classList.remove('pt-hidden')
+        reopenBtn.classList.remove('show')
+    }
+
+    reopenBtn.addEventListener('click', showPanel)
 
     // ==============================
     // 面板元素
@@ -898,9 +1104,193 @@
             if (next && next !== previous) {
                 return next
             }
+
+            if (isGamePage()) {
+                return GAME_CONTENT
+            }
         }
 
         return ''
+    }
+
+    // ==============================
+    // 小游戏
+    // ==============================
+
+    async function completeDuckGameInstance(game, generation) {
+        console.log('[PinyinTyper] 小游戏实例单词:', game.words)
+
+        if (game.gameState === 'START') {
+            game.startGame()
+        }
+
+        await sleep(500)
+
+        const words = [...game.words]
+
+        for (let i = 0; i < words.length; i++) {
+            const word = words[i]
+
+            while (
+                game.currentWordIndex === i &&
+                game.currentCharIndex < word.length &&
+                running &&
+                generation === runGeneration
+            ) {
+                game.checkCharacter(
+                    word[game.currentCharIndex]
+                )
+                await sleep(10)
+            }
+
+            if (!running || generation !== runGeneration) {
+                return false
+            }
+
+            await sleep(250)
+        }
+
+        // 等游戏自己完成最后一跳，别抢在它前面 endGame
+        for (let i = 0; i < 40; i++) {
+            if (game.gameState === 'END') break
+            await sleep(200)
+        }
+
+        if (game.gameState !== 'END') {
+            game.endGame()
+            await sleep(300)
+        }
+
+        game.postMessageToHost(
+            'onComplete',
+            game.lastGameResult || {}
+        )
+
+        for (let i = 0; i < 30; i++) {
+            await sleep(200)
+
+            if (!running || generation !== runGeneration) {
+                return false
+            }
+
+            if (!isGamePage()) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    async function completeDuckGame(generation) {
+        const game = window.__pinyinTyperDuckGame
+
+        if (
+            game &&
+            !game.destroyed &&
+            Array.isArray(game.words) &&
+            game.words.length
+        ) {
+            return completeDuckGameInstance(game, generation)
+        }
+
+        const canvas = document.querySelector(
+            '.duck-jump-runtime canvas'
+        )
+
+        if (!canvas) return false
+
+        const words = readGameWords()
+
+        if (!words.length) {
+            console.warn('[PinyinTyper] 小游戏单词读取失败')
+            return false
+        }
+
+        console.log('[PinyinTyper] 小游戏单词:', words)
+
+        // 等游戏挂好键盘监听
+        await sleep(500)
+
+        // 开始游戏（空格）
+        dispatchGameKey(' ')
+        await sleep(1500)
+
+        for (const word of words) {
+            if (!running || generation !== runGeneration) {
+                return false
+            }
+
+            for (const char of word) {
+                dispatchGameKey(char)
+                await sleep(15)
+            }
+
+            // 游戏内部换词有 200ms 延迟
+            await sleep(300)
+        }
+
+        // 等结算弹窗
+        await sleep(3000)
+
+        const rect = canvas.getBoundingClientRect()
+
+        if (!rect.width || !rect.height) return false
+
+        const clickX = rect.left +
+            (canvas.width / 2 + 126) /
+            canvas.width * rect.width
+
+        const clickY = rect.top +
+            (canvas.height / 2 + 142) /
+            canvas.height * rect.height
+
+        // 点“继续学习”
+        for (let i = 0; i < 10; i++) {
+            if (!running || generation !== runGeneration) {
+                return false
+            }
+
+            canvas.dispatchEvent(new PointerEvent(
+                'pointerdown',
+                {
+                    clientX: clickX,
+                    clientY: clickY,
+                    bubbles: true,
+                    cancelable: true,
+                    pointerType: 'mouse',
+                    button: 0
+                }
+            ))
+
+            await sleep(400)
+
+            if (!isGamePage()) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    async function handleGame(generation) {
+        if (!isGamePage()) return ''
+
+        updateUI('自动完成小游戏')
+
+        const done = await completeDuckGame(generation)
+
+        if (!running || generation !== runGeneration) {
+            return ''
+        }
+
+        if (!done) {
+            console.warn('[PinyinTyper] 小游戏没有完成')
+            return ''
+        }
+
+        console.log('[PinyinTyper] 小游戏完成，等待下一课')
+
+        return waitForNextContent('', generation)
     }
 
     // ==============================
@@ -924,13 +1314,28 @@
             await sleep(CONFIG.startDelay)
 
             while (running && generation === runGeneration) {
-                const content = getContent()
+                let content = getContent()
+
+                // 小游戏页没有拼音内容，先自动完成
+                while (
+                    (!content || content === GAME_CONTENT) &&
+                    isGamePage() &&
+                    running &&
+                    generation === runGeneration
+                ) {
+                    content = await handleGame(generation)
+                }
+
+                if (!running || generation !== runGeneration) {
+                    break
+                }
 
                 if (!content) {
                     updateUI('未找到内容')
                     break
                 }
 
+                updateUI()
                 contentEl.textContent = content
 
                 console.log(
@@ -994,10 +1399,19 @@
                     break
                 }
 
-                const nextContent = await waitForNextContent(
+                let nextContent = await waitForNextContent(
                     content,
                     generation
                 )
+
+                // 下一页可能是小游戏，完成后再等真正的下一课
+                while (
+                    nextContent === GAME_CONTENT &&
+                    running &&
+                    generation === runGeneration
+                ) {
+                    nextContent = await handleGame(generation)
+                }
 
                 if (!running || generation !== runGeneration) {
                     break
@@ -1067,6 +1481,7 @@
 
         panel.remove()
         style.remove()
+        reopenBtn.remove()
 
         delete window.PinyinTyper
     }
@@ -1085,7 +1500,7 @@
 
     $('.pt-reset').addEventListener('click', reset)
 
-    $('.pt-close').addEventListener('click', destroy)
+    $('.pt-close').addEventListener('click', hidePanel)
 
     $('.pt-timer-reset').addEventListener('click', () => {
         resetTimer()
