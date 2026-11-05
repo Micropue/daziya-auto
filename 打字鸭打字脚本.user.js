@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        打字鸭自动打字脚本
 // @namespace   https://docs.scriptcat.org/
-// @version     1.4.2
+// @version     1.4.3
 // @description 自动完成拼音、英文、单词、数字、双拼、五笔、中文练习和小游戏
 // @author      Micropue
 // @match       https://www.daziya.com/*
@@ -73,11 +73,14 @@
         changeTimeout: 5000,
         startDelay: 500,
 
-        // 每键总耗时（毫秒）
-        defaultKeyInterval: 180,
+        // 面板里的平均输入速度，单位：字/分钟
+        defaultSpeed: 300,
+        minSpeed: 30,
+        maxSpeed: 1500,
         // 网站会丢弃 30ms 内同键的 keydown，留点余量
         minKeyInterval: 40,
-        speedStorageKey: 'pinyin-typer-speed-v1',
+        speedStorageKey: 'pinyin-typer-speed-v2',
+        legacySpeedStorageKey: 'pinyin-typer-speed-v1',
 
         // 普通按键间隔
         keyDownDelay: 40,
@@ -126,7 +129,7 @@
     const allowedChars =
         /^[a-zA-Z0-9,.!?;:'"()[\]{}<>_、…·\-]$/
 
-    // waitForNextContent 用这个标记表示“下一页是小游戏”
+    // waitForNextContent 用这个标记表示“下一页不是拼音练习”
     const NEXT_PAGE = '\u0000__NEXT_PAGE__'
 
     // 这些字符需要按住 Shift
@@ -856,22 +859,22 @@
 
         <div class="pt-speed">
             <div class="pt-speed-heading">
-                <label>每键间隔</label>
-                <span class="pt-speed-value">180 ms</span>
+                <label>输入速度</label>
+                <span class="pt-speed-value">300 字/分钟</span>
             </div>
 
             <input
                 class="pt-speed-input"
                 type="number"
-                min="0"
-                max="60000"
+                min="30"
+                max="1500"
                 step="10"
-                value="180"
+                value="300"
                 inputmode="numeric"
             >
 
             <div class="pt-speed-hint">
-                最小 40 ms（再快网站会漏键），数值越大越慢
+                平均速度，实际会轻微浮动；中文练习会自动放慢
             </div>
         </div>
 
@@ -1272,30 +1275,50 @@
                 CONFIG.speedStorageKey
             )
 
-            if (raw === null) {
-                return CONFIG.defaultKeyInterval
+            if (raw !== null) {
+                const saved = Number(raw)
+
+                if (
+                    Number.isFinite(saved) &&
+                    saved >= CONFIG.minSpeed
+                ) {
+                    return saved
+                }
             }
 
-            const saved = Number(raw)
+            // 旧版本存的是毫秒间隔，迁移成字/分钟
+            const legacy = Number(
+                localStorage.getItem(CONFIG.legacySpeedStorageKey)
+            )
 
-            return Number.isFinite(saved) && saved >= 0
-                ? saved
-                : CONFIG.defaultKeyInterval
-        } catch {
-            return CONFIG.defaultKeyInterval
-        }
+            if (Number.isFinite(legacy) && legacy > 0) {
+                const interval = Math.max(
+                    CONFIG.minKeyInterval,
+                    legacy
+                )
+
+                return Math.round(60000 / interval)
+            }
+        } catch {}
+
+        return CONFIG.defaultSpeed
     }
 
     function applySpeed(value) {
-        let interval = Math.round(Number(value))
+        let speed = Math.round(Number(value))
 
-        if (!Number.isFinite(interval) || interval < 0) {
-            interval = 0
+        if (!Number.isFinite(speed)) {
+            speed = CONFIG.defaultSpeed
         }
 
-        interval = Math.max(
+        speed = Math.max(
+            CONFIG.minSpeed,
+            Math.min(CONFIG.maxSpeed, speed)
+        )
+
+        const interval = Math.max(
             CONFIG.minKeyInterval,
-            Math.min(interval, 60000)
+            Math.min(60000, Math.round(60000 / speed))
         )
 
         const hold = Math.min(40, Math.floor(interval / 3))
@@ -1304,15 +1327,45 @@
         CONFIG.keyDownDelay = hold
         CONFIG.keyPressDelay = hold
 
-        speedInput.value = interval
-        speedValueEl.textContent = `${interval} ms`
+        speedInput.value = speed
+        speedValueEl.textContent = `${speed} 字/分钟`
 
         try {
             localStorage.setItem(
                 CONFIG.speedStorageKey,
-                String(interval)
+                String(speed)
+            )
+            localStorage.removeItem(
+                CONFIG.legacySpeedStorageKey
             )
         } catch {}
+    }
+
+    // 输入速度不是匀速：在平均值附近小幅浮动
+    function jitterDelay(base, spread = 0.15) {
+        const factor = 1 - spread + Math.random() * spread * 2
+
+        return Math.max(0, Math.round(base * factor))
+    }
+
+    function nextKeyInterval(minTotal = 0) {
+        const hold = CONFIG.keyDownDelay + CONFIG.keyPressDelay
+        const base = CONFIG.typingInterval + hold
+        const total = Math.max(minTotal, jitterDelay(base))
+
+        return Math.max(0, total - hold)
+    }
+
+    // 中文是整字注入，比拼音慢一点，数据更稳
+    function nextChineseInterval() {
+        const hold = CONFIG.keyDownDelay + CONFIG.keyPressDelay
+        const base = Math.max(
+            100,
+            Math.round((CONFIG.typingInterval + hold) * 1.3)
+        )
+        const total = jitterDelay(base, 0.1)
+
+        return Math.max(0, total - hold)
     }
 
     speedInput.addEventListener('change', () => {
@@ -1654,9 +1707,9 @@
                 await dispatchKey(char)
             }
 
-            await sleep(isNumpadLesson()
-                ? Math.max(CONFIG.typingInterval, 120)
-                : CONFIG.typingInterval)
+            await sleep(nextKeyInterval(
+                isNumpadLesson() ? 120 : 0
+            ))
 
             let changed = false
 
@@ -1734,7 +1787,7 @@
                 await dispatchKey(char)
             }
 
-            await sleep(CONFIG.typingInterval)
+            await sleep(nextKeyInterval())
 
             for (let i = 0; i < 10; i++) {
                 await sleep(50)
@@ -1850,7 +1903,7 @@
             }))
 
             // 一次一个字，整行注入网站不计成绩
-            await sleep(Math.max(CONFIG.typingInterval, 60))
+            await sleep(nextChineseInterval())
 
             const nextBlock = document.querySelector(
                 '.chinese-v2-block.is-current'
@@ -2185,7 +2238,7 @@
                         break
                     }
 
-                    await sleep(CONFIG.typingInterval)
+                    await sleep(nextKeyInterval())
                 }
 
                 if (!running || generation !== runGeneration) {
