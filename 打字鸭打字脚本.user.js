@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        打字鸭自动打字脚本
 // @namespace   https://docs.scriptcat.org/
-// @version     1.4.1
+// @version     1.4.2
 // @description 自动完成拼音、英文、单词、数字、双拼、五笔、中文练习和小游戏
 // @author      Micropue
 // @match       https://www.daziya.com/*
@@ -1807,7 +1807,7 @@
 
     async function runChineseLesson(generation) {
         const before = lessonSignature()
-        let blocked = 0
+        let stalled = 0
 
         while (running && generation === runGeneration) {
             const block = document.querySelector(
@@ -1816,33 +1816,20 @@
 
             if (!block) break
 
-            const targetCells = [...block.querySelectorAll(
-                '.chinese-v2-target-row .chinese-v2-cell--target'
-            )]
-            const cells = targetCells.length
-                ? targetCells
-                : [...block.querySelectorAll(
-                    '.chinese-v2-char'
-                )]
-            const activeCellIndex = targetCells.length
-                ? targetCells.findIndex(cell =>
-                    cell.classList.contains('is-active')
-                )
-                : 0
-            const startIndex = activeCellIndex >= 0
-                ? activeCellIndex
-                : 0
-            const text = cells
-                .slice(startIndex)
-                .map(item => item.textContent)
-                .join('')
+            const activeCell = block.querySelector(
+                '.chinese-v2-target-row .chinese-v2-cell--target.is-active'
+            )
 
-            if (!text) {
-                blocked++
+            const char = activeCell?.querySelector(
+                '.chinese-v2-char'
+            )?.textContent ?? ''
 
-                if (blocked >= 10) break
+            if (!char) {
+                stalled++
 
-                await sleep(200)
+                if (stalled >= 20) break
+
+                await sleep(150)
                 continue
             }
 
@@ -1853,44 +1840,39 @@
             if (!input) break
 
             input.focus()
-            input.value = text
+            input.value = char
 
             input.dispatchEvent(new InputEvent('input', {
                 inputType: 'insertText',
-                data: text,
+                data: char,
                 bubbles: true,
                 cancelable: true
             }))
 
-            await sleep(300)
+            // 一次一个字，整行注入网站不计成绩
+            await sleep(Math.max(CONFIG.typingInterval, 60))
 
             const nextBlock = document.querySelector(
                 '.chinese-v2-block.is-current'
             )
-            const nextCells = nextBlock
-                ? [...nextBlock.querySelectorAll(
-                    '.chinese-v2-target-row .chinese-v2-cell--target'
-                )]
-                : []
-            const nextActiveIndex = nextBlock === block
-                ? nextCells.findIndex(cell =>
-                    cell.classList.contains('is-active')
-                )
-                : -1
 
-            if (nextBlock === block && nextActiveIndex === startIndex) {
-                blocked++
+            const nextActiveCell = nextBlock?.querySelector(
+                '.chinese-v2-target-row .chinese-v2-cell--target.is-active'
+            )
 
-                if (blocked >= 3) {
+            if (nextBlock === block && nextActiveCell === activeCell) {
+                stalled++
+
+                if (stalled >= 3) {
                     console.warn(
                         '[PinyinTyper] 中文输入没有推进'
                     )
                     break
                 }
 
-                await sleep(300)
+                await sleep(150)
             } else {
-                blocked = 0
+                stalled = 0
             }
         }
 
