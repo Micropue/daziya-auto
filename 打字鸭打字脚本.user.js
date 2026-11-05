@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name        打字鸭自动打字脚本
 // @namespace   https://docs.scriptcat.org/
-// @version     1.3.1
-// @description 你的作业也忘记提交了吗？快试试这个脚本叭！
+// @version     1.4.1
+// @description 自动完成拼音、英文、单词、数字、双拼、五笔、中文练习和小游戏
 // @author      Micropue
 // @match       https://www.daziya.com/*
 // @icon        https://www.daziya.com/favicon.svg
@@ -127,12 +127,13 @@
         /^[a-zA-Z0-9,.!?;:'"()[\]{}<>_、…·\-]$/
 
     // waitForNextContent 用这个标记表示“下一页是小游戏”
-    const GAME_CONTENT = '\u0000__GAME__'
+    const NEXT_PAGE = '\u0000__NEXT_PAGE__'
 
     // 这些字符需要按住 Shift
     const shiftChars = new Set([
-        '!', '?', ':', '"', '(', ')', '_', '<', '>', '{', '}',
-        '…', '·'
+        '!', '@', '#', '$', '%', '^', '&', '*', '+',
+        '?', ':', '"', '(', ')', '_', '<', '>', '{', '}',
+        '|', '~', '…', '·'
     ])
 
     function convert(text) {
@@ -304,6 +305,216 @@
     }
 
     // ==============================
+    // 练习类型识别
+    // ==============================
+
+    function findNextButton() {
+        const texts = [
+            '下一步', '继续', '开始学习', '开始练习',
+            '完成', '下一关', '下一课'
+        ]
+
+        return [...document.querySelectorAll(
+            'button, [role="button"]'
+        )].find(button => {
+            if (
+                !button ||
+                button.disabled ||
+                button.offsetParent === null ||
+                button.closest('#pinyin-typer-panel')
+            ) {
+                return false
+            }
+
+            const text = (
+                button.innerText ||
+                button.textContent ||
+                ''
+            ).trim()
+
+            return texts.some(item =>
+                text === item || text.startsWith(item)
+            )
+        }) || null
+    }
+
+    function detectLessonMode() {
+        if (isGamePage()) return 'game'
+
+        if (document.querySelector(
+            '.lesson-key-stage.pinyin-box-content'
+        )) {
+            return 'pinyin'
+        }
+
+        if (
+            document.querySelector('.chinese-v2-input-source') ||
+            document.querySelector('.chinese-box-input')
+        ) {
+            return 'chinese'
+        }
+
+        if (document.querySelector('.vocabulary-box-letter')) {
+            return 'vocabulary'
+        }
+
+        if (document.querySelector(
+            '.test-box-content .test-box-item'
+        )) {
+            return 'token'
+        }
+
+        if (document.querySelector('.shuangpin-box-content')) {
+            return 'shuangpin'
+        }
+
+        if (document.querySelector('.wubi-stage')) {
+            return 'wubi'
+        }
+
+        if (readActiveKey() || findNextButton()) {
+            return 'instruction'
+        }
+
+        return 'unknown'
+    }
+
+    function lessonSignature() {
+        return [
+            location.href,
+            document.title,
+            detectLessonMode()
+        ].join('|')
+    }
+
+    function readActiveKey() {
+        const active = document.querySelector('.key--active')
+
+        if (active) {
+            const letter = active.querySelector(
+                '.key__letter, .key__sp-letter'
+            )
+            const text = (
+                letter ? letter.textContent : active.textContent
+            ).trim()
+
+            if (text) return text
+        }
+
+        const wubiKey = document.querySelector(
+            '.wubi-keyboard__key--active'
+        )
+
+        if (wubiKey) {
+            const label = wubiKey.getAttribute('aria-label') || ''
+            const match = label.match(/^([A-Za-z0-9])\s*键/)
+
+            if (match) return match[1]
+        }
+
+        const wubiCell = document.querySelector(
+            '.wubi-breakdown__practice-cell.is-active'
+        )
+
+        if (wubiCell) {
+            const text = wubiCell.textContent.trim()
+
+            if (text) return text
+        }
+
+        const numpadKey = document.querySelector(
+            '.numpad-key--active'
+        )
+
+        if (numpadKey) {
+            const text = numpadKey.textContent.trim()
+
+            if (text) return text
+        }
+
+        return ''
+    }
+
+    function readActiveTarget() {
+        const token = document.querySelector(
+            '.test-box-item__active'
+        )
+
+        if (token) {
+            return {
+                char: token.textContent === '\u00a0'
+                    ? ' '
+                    : token.textContent,
+                kind: 'token'
+            }
+        }
+
+        const letter = document.querySelector(
+            '.vocabulary-box-letter__active'
+        )
+
+        if (letter) {
+            return {
+                char: letter.textContent,
+                kind: 'vocabulary'
+            }
+        }
+
+        return null
+    }
+
+    function activeTargetSignature() {
+        const token = document.querySelector(
+            '.test-box-item__active'
+        )
+
+        if (token) {
+            const all = [...document.querySelectorAll(
+                '.test-box-item'
+            )]
+
+            return `token:${all.indexOf(token)}:${token.textContent}`
+        }
+
+        const letter = document.querySelector(
+            '.vocabulary-box-letter__active'
+        )
+
+        if (letter) {
+            const all = [...document.querySelectorAll(
+                '.vocabulary-box-letter'
+            )]
+
+            return `vocabulary:${all.indexOf(letter)}:${letter.textContent}`
+        }
+
+        return ''
+    }
+
+    function isNumpadLesson() {
+        return !!document.querySelector('.numpad-keyboard')
+    }
+
+    const numpadKeyMap = {
+        '0': ['Numpad0', 96],
+        '1': ['Numpad1', 97],
+        '2': ['Numpad2', 98],
+        '3': ['Numpad3', 99],
+        '4': ['Numpad4', 100],
+        '5': ['Numpad5', 101],
+        '6': ['Numpad6', 102],
+        '7': ['Numpad7', 103],
+        '8': ['Numpad8', 104],
+        '9': ['Numpad9', 105],
+        '.': ['NumpadDecimal', 110],
+        '+': ['NumpadAdd', 107],
+        '-': ['NumpadSubtract', 109],
+        '*': ['NumpadMultiply', 106],
+        '/': ['NumpadDivide', 111],
+        'Enter': ['NumpadEnter', 13]
+    }
+
+    // ==============================
     // 键盘事件
     // ==============================
 
@@ -329,6 +540,18 @@
         '(': { keyCode: 57, code: 'Digit9' },
         ')': { keyCode: 48, code: 'Digit0' },
         '!': { keyCode: 49, code: 'Digit1' },
+        '@': { keyCode: 50, code: 'Digit2' },
+        '#': { keyCode: 51, code: 'Digit3' },
+        '$': { keyCode: 52, code: 'Digit4' },
+        '%': { keyCode: 53, code: 'Digit5' },
+        '^': { keyCode: 54, code: 'Digit6' },
+        '&': { keyCode: 55, code: 'Digit7' },
+        '*': { keyCode: 56, code: 'Digit8' },
+        '+': { keyCode: 187, code: 'Equal' },
+        '|': { keyCode: 220, code: 'Backslash' },
+        '\\': { keyCode: 220, code: 'Backslash' },
+        '`': { keyCode: 192, code: 'Backquote' },
+        '~': { keyCode: 192, code: 'Backquote' },
         '?': { keyCode: 191, code: 'Slash' },
         ':': { keyCode: 186, code: 'Semicolon' },
         '"': { keyCode: 222, code: 'Quote' }
@@ -355,6 +578,49 @@
     // 普通按键：按下 -> 按住 -> 松开
     async function dispatchKey(char) {
         const target = getKeyTarget()
+        const lower = char.toLowerCase()
+
+        if (char === '\n' || lower === 'enter') {
+            await dispatchEnter()
+            return
+        }
+
+        if (char === '\t' || lower === 'tab') {
+            const options = {
+                key: 'Tab',
+                code: 'Tab',
+                keyCode: 9,
+                which: 9,
+                charCode: 9
+            }
+
+            target.dispatchEvent(
+                createKeyboardEvent('keydown', options)
+            )
+            target.dispatchEvent(
+                createKeyboardEvent('keyup', options)
+            )
+            return
+        }
+
+        if (lower === 'shift') {
+            const options = {
+                key: 'Shift',
+                code: 'ShiftLeft',
+                keyCode: 16,
+                which: 16,
+                charCode: 0
+            }
+
+            target.dispatchEvent(
+                createKeyboardEvent('keydown', options)
+            )
+            target.dispatchEvent(
+                createKeyboardEvent('keyup', options)
+            )
+            return
+        }
+
         const upper = char.toUpperCase()
 
         const info = keyCodeMap[char] || {
@@ -417,6 +683,28 @@
 
         // 等待网页完成换行处理
         await sleep(CONFIG.enterWait)
+    }
+
+    function dispatchNumpadKey(char) {
+        const info = numpadKeyMap[char]
+
+        if (!info) return dispatchKey(char)
+
+        const options = {
+            key: char,
+            code: info[0],
+            keyCode: info[1],
+            which: info[1],
+            location: 3
+        }
+
+        window.dispatchEvent(
+            createKeyboardEvent('keydown', options)
+        )
+
+        window.dispatchEvent(
+            createKeyboardEvent('keyup', options)
+        )
     }
 
     // 小游戏只要 keydown，不需要键程
@@ -974,6 +1262,10 @@
     let destroyed = false
     let timerInterval = null
 
+    // 五笔测验暂停后从当前题继续
+    let wubiTestSignature = ''
+    let wubiTestCursor = 0
+
     function loadSpeed() {
         try {
             const raw = localStorage.getItem(
@@ -1105,8 +1397,10 @@
                 return next
             }
 
-            if (isGamePage()) {
-                return GAME_CONTENT
+            const mode = detectLessonMode()
+
+            if (mode !== 'pinyin' && mode !== 'unknown') {
+                return NEXT_PAGE
             }
         }
 
@@ -1294,6 +1588,484 @@
     }
 
     // ==============================
+    // 其他练习类型
+    // ==============================
+
+    async function finishLesson(before, generation) {
+        if (lessonSignature() !== before) {
+            return true
+        }
+
+        const button = findNextButton()
+
+        if (button) {
+            button.click()
+        } else {
+            await dispatchEnter()
+        }
+
+        for (let i = 0; i < 50; i++) {
+            await sleep(200)
+
+            if (!running || generation !== runGeneration) {
+                return false
+            }
+
+            if (lessonSignature() !== before) {
+                return true
+            }
+        }
+
+        // 有些反馈页只认 Enter
+        await dispatchEnter()
+
+        for (let i = 0; i < 30; i++) {
+            await sleep(200)
+
+            if (!running || generation !== runGeneration) {
+                return false
+            }
+
+            if (lessonSignature() !== before) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    async function runActiveTargetLesson(generation) {
+        const before = lessonSignature()
+        let stalled = 0
+
+        while (running && generation === runGeneration) {
+            const target = readActiveTarget()
+
+            if (!target) break
+
+            const signature = activeTargetSignature()
+            const char = target.char
+
+            if (!char || char === '\n') {
+                await dispatchEnter()
+            } else if (isNumpadLesson()) {
+                await dispatchNumpadKey(char)
+            } else {
+                await dispatchKey(char)
+            }
+
+            await sleep(isNumpadLesson()
+                ? Math.max(CONFIG.typingInterval, 120)
+                : CONFIG.typingInterval)
+
+            let changed = false
+
+            for (let i = 0; i < 12; i++) {
+                await sleep(50)
+
+                if (!running || generation !== runGeneration) {
+                    return false
+                }
+
+                if (activeTargetSignature() !== signature) {
+                    changed = true
+                    break
+                }
+            }
+
+            if (!changed) {
+                stalled++
+
+                if (stalled >= 3) {
+                    console.warn(
+                        '[PinyinTyper] 当前目标没有推进'
+                    )
+                    break
+                }
+            } else {
+                stalled = 0
+            }
+        }
+
+        return finishLesson(before, generation)
+    }
+
+    async function runGuidedKeyLesson(generation) {
+        const before = lessonSignature()
+        let lastKey = ''
+        let sameCount = 0
+
+        for (
+            let steps = 0;
+            steps < 3000 &&
+            running &&
+            generation === runGeneration;
+            steps++
+        ) {
+            const key = readActiveKey()
+
+            if (!key) break
+
+            if (key === lastKey) {
+                sameCount++
+            } else {
+                lastKey = key
+                sameCount = 0
+            }
+
+            if (sameCount > 20) {
+                console.warn(
+                    '[PinyinTyper] 引导按键没有推进'
+                )
+                break
+            }
+
+            let char = key
+
+            if (/^[A-Z]$/.test(char)) {
+                char = char.toLowerCase()
+            }
+
+            if (char === 'Enter') {
+                await dispatchEnter()
+            } else if (isNumpadLesson()) {
+                await dispatchNumpadKey(char)
+            } else {
+                await dispatchKey(char)
+            }
+
+            await sleep(CONFIG.typingInterval)
+
+            for (let i = 0; i < 10; i++) {
+                await sleep(50)
+
+                if (!running || generation !== runGeneration) {
+                    return false
+                }
+
+                if (readActiveKey() !== key) break
+            }
+        }
+
+        return finishLesson(before, generation)
+    }
+
+    async function runInstructionLesson(generation) {
+        const before = lessonSignature()
+        let idle = 0
+
+        for (
+            let steps = 0;
+            steps < 3000 &&
+            running &&
+            generation === runGeneration;
+            steps++
+        ) {
+            if (detectLessonMode() !== 'instruction') {
+                return true
+            }
+
+            const key = readActiveKey()
+
+            if (key) {
+                let char = /^[A-Z]$/.test(key)
+                    ? key.toLowerCase()
+                    : key
+
+                if (char === 'Enter') {
+                    await dispatchEnter()
+                } else if (isNumpadLesson()) {
+                    await dispatchNumpadKey(char)
+                } else {
+                    await dispatchKey(char)
+                }
+
+                await sleep(150)
+                idle = 0
+            } else {
+                const button = findNextButton()
+
+                if (button) {
+                    button.click()
+                    await sleep(300)
+                    idle = 0
+                } else {
+                    await sleep(150)
+                    idle++
+
+                    if (idle > 40) break
+                }
+            }
+
+            if (lessonSignature() !== before) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    async function runChineseLesson(generation) {
+        const before = lessonSignature()
+        let blocked = 0
+
+        while (running && generation === runGeneration) {
+            const block = document.querySelector(
+                '.chinese-v2-block.is-current'
+            )
+
+            if (!block) break
+
+            const targetCells = [...block.querySelectorAll(
+                '.chinese-v2-target-row .chinese-v2-cell--target'
+            )]
+            const cells = targetCells.length
+                ? targetCells
+                : [...block.querySelectorAll(
+                    '.chinese-v2-char'
+                )]
+            const activeCellIndex = targetCells.length
+                ? targetCells.findIndex(cell =>
+                    cell.classList.contains('is-active')
+                )
+                : 0
+            const startIndex = activeCellIndex >= 0
+                ? activeCellIndex
+                : 0
+            const text = cells
+                .slice(startIndex)
+                .map(item => item.textContent)
+                .join('')
+
+            if (!text) {
+                blocked++
+
+                if (blocked >= 10) break
+
+                await sleep(200)
+                continue
+            }
+
+            const input =
+                document.querySelector('.chinese-v2-input-source') ||
+                document.querySelector('.chinese-box-input')
+
+            if (!input) break
+
+            input.focus()
+            input.value = text
+
+            input.dispatchEvent(new InputEvent('input', {
+                inputType: 'insertText',
+                data: text,
+                bubbles: true,
+                cancelable: true
+            }))
+
+            await sleep(300)
+
+            const nextBlock = document.querySelector(
+                '.chinese-v2-block.is-current'
+            )
+            const nextCells = nextBlock
+                ? [...nextBlock.querySelectorAll(
+                    '.chinese-v2-target-row .chinese-v2-cell--target'
+                )]
+                : []
+            const nextActiveIndex = nextBlock === block
+                ? nextCells.findIndex(cell =>
+                    cell.classList.contains('is-active')
+                )
+                : -1
+
+            if (nextBlock === block && nextActiveIndex === startIndex) {
+                blocked++
+
+                if (blocked >= 3) {
+                    console.warn(
+                        '[PinyinTyper] 中文输入没有推进'
+                    )
+                    break
+                }
+
+                await sleep(300)
+            } else {
+                blocked = 0
+            }
+        }
+
+        return finishLesson(before, generation)
+    }
+
+    function isWubiTest() {
+        return !!document.querySelector(
+            '.wubi-breakdown__test-slots'
+        )
+    }
+
+    function readWubiTestList() {
+        const dataScript = document.querySelector('#__NUXT_DATA__')
+
+        if (!dataScript) return []
+
+        let data
+
+        try {
+            data = JSON.parse(dataScript.textContent)
+        } catch {
+            return []
+        }
+
+        if (!Array.isArray(data)) return []
+
+        for (const item of data) {
+            if (
+                !item ||
+                typeof item !== 'object' ||
+                Array.isArray(item) ||
+                !('contentType' in item)
+            ) {
+                continue
+            }
+
+            for (const field of ['pinyin', 'wubi', 'text']) {
+                let text = item[field]
+
+                if (text === undefined) continue
+
+                if (typeof text === 'number') {
+                    text = data[text]
+                }
+
+                if (Array.isArray(text)) {
+                    text = text
+                        .map(value =>
+                            typeof value === 'number'
+                                ? data[value]
+                                : value
+                        )
+                        .join('')
+                }
+
+                if (typeof text !== 'string') continue
+
+                try {
+                    const list = JSON.parse(text)
+
+                    if (
+                        Array.isArray(list) &&
+                        list.every(entry =>
+                            entry &&
+                            typeof entry.char === 'string' &&
+                            typeof entry.code === 'string'
+                        )
+                    ) {
+                        return list
+                    }
+                } catch {}
+            }
+        }
+
+        return []
+    }
+
+    async function runWubiTestLesson(generation) {
+        const before = lessonSignature()
+        const list = readWubiTestList()
+
+        if (!list.length) {
+            return runGuidedKeyLesson(generation)
+        }
+
+        console.log(
+            '[PinyinTyper] 五笔测验:',
+            list.map(item => `${item.char}:${item.code}`).join(' ')
+        )
+
+        if (wubiTestSignature !== before) {
+            wubiTestSignature = before
+            wubiTestCursor = 0
+        }
+
+        for (let i = wubiTestCursor; i < list.length; i++) {
+            if (!running || generation !== runGeneration) {
+                return false
+            }
+
+            const item = list[i]
+            const slotsLabel = document.querySelector(
+                '.wubi-breakdown__test-slots'
+            )?.getAttribute('aria-label') || ''
+            const typedMatch = slotsLabel.match(
+                /已输入\s*(\d+)\s*码/
+            )
+            const typed = typedMatch
+                ? Number(typedMatch[1])
+                : 0
+
+            for (const char of item.code.slice(typed)) {
+                const before = document.querySelector(
+                    '.wubi-breakdown__test-slots'
+                )?.getAttribute('aria-label') || ''
+
+                await dispatchKey(char.toLowerCase())
+                await sleep(220)
+
+                const after = document.querySelector(
+                    '.wubi-breakdown__test-slots'
+                )?.getAttribute('aria-label') || ''
+
+                if (after === before) {
+                    await dispatchKey(char.toLowerCase())
+                    await sleep(220)
+                }
+            }
+
+            wubiTestCursor = i + 1
+            await sleep(250)
+        }
+
+        return finishLesson(before, generation)
+    }
+
+    async function runLessonMode(mode, generation) {
+        if (mode === 'token' || mode === 'vocabulary') {
+            return runActiveTargetLesson(generation)
+        }
+
+        if (mode === 'shuangpin') {
+            return runGuidedKeyLesson(generation)
+        }
+
+        if (mode === 'wubi') {
+            // 五笔页面数据是异步出来的，稍等一下再判断
+            for (let i = 0; i < 30; i++) {
+                if (isWubiTest()) {
+                    return runWubiTestLesson(generation)
+                }
+
+                if (readActiveKey()) break
+
+                await sleep(100)
+            }
+
+            return isWubiTest()
+                ? runWubiTestLesson(generation)
+                : runGuidedKeyLesson(generation)
+        }
+
+        if (mode === 'instruction') {
+            return runInstructionLesson(generation)
+        }
+
+        if (mode === 'chinese') {
+            return runChineseLesson(generation)
+        }
+
+        return false
+    }
+
+    // ==============================
     // 主运行逻辑
     // ==============================
 
@@ -1316,23 +2088,67 @@
             while (running && generation === runGeneration) {
                 let content = getContent()
 
-                // 小游戏页没有拼音内容，先自动完成
-                while (
-                    (!content || content === GAME_CONTENT) &&
-                    isGamePage() &&
-                    running &&
-                    generation === runGeneration
-                ) {
-                    content = await handleGame(generation)
-                }
-
-                if (!running || generation !== runGeneration) {
-                    break
-                }
-
                 if (!content) {
-                    updateUI('未找到内容')
-                    break
+                    const mode = detectLessonMode()
+
+                    if (mode === 'game') {
+                        while (
+                            running &&
+                            generation === runGeneration
+                        ) {
+                            content = await handleGame(generation)
+
+                            if (!running || generation !== runGeneration) {
+                                break
+                            }
+
+                            if (!content || content !== NEXT_PAGE) {
+                                break
+                            }
+
+                            if (!isGamePage()) break
+                        }
+                    } else if (
+                        mode !== 'pinyin' &&
+                        mode !== 'unknown'
+                    ) {
+                        console.log('[PinyinTyper] 模式:', mode)
+
+                        const done = await runLessonMode(
+                            mode,
+                            generation
+                        )
+
+                        if (!running || generation !== runGeneration) {
+                            break
+                        }
+
+                        if (!done) {
+                            updateUI('未找到内容')
+                            break
+                        }
+
+                        content = await waitForNextContent(
+                            '',
+                            generation
+                        )
+                    } else {
+                        updateUI('未找到内容')
+                        break
+                    }
+
+                    if (!running || generation !== runGeneration) {
+                        break
+                    }
+
+                    if (content === NEXT_PAGE) {
+                        continue
+                    }
+
+                    if (!content) {
+                        updateUI('等待超时')
+                        break
+                    }
                 }
 
                 updateUI()
@@ -1343,7 +2159,27 @@
                     JSON.stringify(content)
                 )
 
-                for (let i = 0; i < content.length; i++) {
+                // 暂停后继续时，从网站当前高亮的位置接着打
+                const activeBox = document.querySelector(
+                    '.pinyin-box__active'
+                )
+                const activeIndex = activeBox
+                    ? Number(activeBox.dataset.targetIndex)
+                    : 0
+                const startIndex =
+                    Number.isInteger(activeIndex) &&
+                    activeIndex >= 0 &&
+                    activeIndex < content.length
+                        ? activeIndex
+                        : 0
+
+                console.log(
+                    '[PinyinTyper] 从第',
+                    startIndex + 1,
+                    '个字符继续'
+                )
+
+                for (let i = startIndex; i < content.length; i++) {
                     if (!running || generation !== runGeneration) {
                         break
                     }
@@ -1404,13 +2240,9 @@
                     generation
                 )
 
-                // 下一页可能是小游戏，完成后再等真正的下一课
-                while (
-                    nextContent === GAME_CONTENT &&
-                    running &&
-                    generation === runGeneration
-                ) {
-                    nextContent = await handleGame(generation)
+                // 下一页可能是小游戏或其他练习类型
+                if (nextContent === NEXT_PAGE) {
+                    continue
                 }
 
                 if (!running || generation !== runGeneration) {
