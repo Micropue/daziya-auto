@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        打字鸭自动打字脚本
 // @namespace   https://docs.scriptcat.org/
-// @version     1.4.3
+// @version     1.4.4
 // @description 自动完成拼音、英文、单词、数字、双拼、五笔、中文练习和小游戏
 // @author      Micropue
 // @match       https://www.daziya.com/*
@@ -864,6 +864,16 @@
             </div>
 
             <input
+                class="pt-speed-range"
+                type="range"
+                min="30"
+                max="1500"
+                step="10"
+                value="300"
+                aria-label="输入速度"
+            >
+
+            <input
                 class="pt-speed-input"
                 type="number"
                 min="30"
@@ -1021,6 +1031,13 @@
             color: #35d99a;
             font-size: 11px;
             font-variant-numeric: tabular-nums;
+        }
+
+        #pinyin-typer-panel .pt-speed-range {
+            width: 100%;
+            margin-top: 10px;
+            accent-color: #35d99a;
+            cursor: pointer;
         }
 
         #pinyin-typer-panel .pt-speed-input {
@@ -1259,6 +1276,7 @@
     const timerStatusEl = $('.pt-timer-status')
 
     const speedInput = $('.pt-speed-input')
+    const speedRange = $('.pt-speed-range')
     const speedValueEl = $('.pt-speed-value')
 
     let running = false
@@ -1328,6 +1346,7 @@
         CONFIG.keyPressDelay = hold
 
         speedInput.value = speed
+        speedRange.value = speed
         speedValueEl.textContent = `${speed} 字/分钟`
 
         try {
@@ -1370,6 +1389,10 @@
 
     speedInput.addEventListener('change', () => {
         applySpeed(speedInput.value)
+    })
+
+    speedRange.addEventListener('input', () => {
+        applySpeed(speedRange.value)
     })
 
     applySpeed(loadSpeed())
