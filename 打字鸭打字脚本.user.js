@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        打字鸭自动打字脚本
 // @namespace   https://docs.scriptcat.org/
-// @version     1.4.4
+// @version     1.4.5
 // @description 自动完成拼音、英文、单词、数字、双拼、五笔、中文练习和小游戏
 // @author      Micropue
 // @match       https://www.daziya.com/*
@@ -123,11 +123,13 @@
         '】': ']',
         '《': '<',
         '》': '>',
-        '—': '-'
+        '—': '-',
+        '％': '%',
+        '／': '/'
     }
 
     const allowedChars =
-        /^[a-zA-Z0-9,.!?;:'"()[\]{}<>_、…·\-]$/
+        /^[a-zA-Z0-9,.!?;:'"()[\]{}<>_、…·%\/\-]$/
 
     // waitForNextContent 用这个标记表示“下一页不是拼音练习”
     const NEXT_PAGE = '\u0000__NEXT_PAGE__'
@@ -394,6 +396,15 @@
         const active = document.querySelector('.key--active')
 
         if (active) {
+            // 特殊符号键：上面是 %、^、# 等，下面是基础数字
+            const top = active.querySelector('.key__text--top')
+
+            if (top) {
+                const text = top.textContent.trim()
+
+                if (text) return text
+            }
+
             const letter = active.querySelector(
                 '.key__letter, .key__sp-letter'
             )
