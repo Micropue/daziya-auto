@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        打字鸭自动打字脚本
 // @namespace   https://docs.scriptcat.org/
-// @version     1.4.5
+// @version     1.4.6
 // @description 自动完成拼音、英文、单词、数字、双拼、五笔、中文练习和小游戏
 // @author      Micropue
 // @match       https://www.daziya.com/*
@@ -125,11 +125,38 @@
         '》': '>',
         '—': '-',
         '％': '%',
-        '／': '/'
+        '／': '/',
+        '＃': '#',
+        '＄': '$',
+        '＆': '&',
+        '＊': '*',
+        '＋': '+',
+        '－': '-',
+        '＝': '=',
+        '＠': '@',
+        '＾': '^',
+        '＿': '_',
+        '｛': '{',
+        '｝': '}',
+        '｜': '|',
+        '＼': '\\',
+        '～': '~',
+        '＜': '<',
+        '＞': '>',
+        '０': '0',
+        '１': '1',
+        '２': '2',
+        '３': '3',
+        '４': '4',
+        '５': '5',
+        '６': '6',
+        '７': '7',
+        '８': '8',
+        '９': '9'
     }
 
-    const allowedChars =
-        /^[a-zA-Z0-9,.!?;:'"()[\]{}<>_、…·%\/\-]$/
+    // 拼音内容里所有可打印 ASCII 符号都保留，避免意外符号被丢掉
+    const allowedChars = /^[\x21-\x7E、…·]$/
 
     // waitForNextContent 用这个标记表示“下一页不是拼音练习”
     const NEXT_PAGE = '\u0000__NEXT_PAGE__'
@@ -363,9 +390,12 @@
             return 'vocabulary'
         }
 
-        if (document.querySelector(
-            '.test-box-content .test-box-item'
-        )) {
+        if (
+            document.querySelector(
+                '.test-box-content .test-box-item'
+            ) ||
+            document.querySelector('.practice-box-item')
+        ) {
             return 'token'
         }
 
@@ -450,6 +480,19 @@
     }
 
     function readActiveTarget() {
+        const practice = document.querySelector(
+            '.practice-box-item__active'
+        )
+
+        if (practice) {
+            return {
+                char: practice.textContent === '\u00a0'
+                    ? ' '
+                    : practice.textContent,
+                kind: 'practice'
+            }
+        }
+
         const token = document.querySelector(
             '.test-box-item__active'
         )
@@ -478,6 +521,18 @@
     }
 
     function activeTargetSignature() {
+        const practice = document.querySelector(
+            '.practice-box-item__active'
+        )
+
+        if (practice) {
+            const all = [...document.querySelectorAll(
+                '.practice-box-item'
+            )]
+
+            return `practice:${all.indexOf(practice)}:${practice.textContent}`
+        }
+
         const token = document.querySelector(
             '.test-box-item__active'
         )
@@ -533,6 +588,16 @@
     // ==============================
 
     const keyCodeMap = {
+        '0': { keyCode: 48, code: 'Digit0' },
+        '1': { keyCode: 49, code: 'Digit1' },
+        '2': { keyCode: 50, code: 'Digit2' },
+        '3': { keyCode: 51, code: 'Digit3' },
+        '4': { keyCode: 52, code: 'Digit4' },
+        '5': { keyCode: 53, code: 'Digit5' },
+        '6': { keyCode: 54, code: 'Digit6' },
+        '7': { keyCode: 55, code: 'Digit7' },
+        '8': { keyCode: 56, code: 'Digit8' },
+        '9': { keyCode: 57, code: 'Digit9' },
         ' ': { keyCode: 32, code: 'Space' },
         ',': { keyCode: 188, code: 'Comma' },
         '.': { keyCode: 190, code: 'Period' },
@@ -592,7 +657,8 @@
     // 普通按键：按下 -> 按住 -> 松开
     async function dispatchKey(char) {
         const target = getKeyTarget()
-        const lower = char.toLowerCase()
+        const keyChar = punctuationMap[char] ?? char
+        const lower = keyChar.toLowerCase()
 
         if (char === '\n' || lower === 'enter') {
             await dispatchEnter()
@@ -635,24 +701,24 @@
             return
         }
 
-        const upper = char.toUpperCase()
+        const upper = keyChar.toUpperCase()
 
-        const info = keyCodeMap[char] || {
-            keyCode: char.length === 1
-                ? char.toUpperCase().charCodeAt(0)
+        const info = keyCodeMap[keyChar] || {
+            keyCode: keyChar.length === 1
+                ? keyChar.toUpperCase().charCodeAt(0)
                 : 0,
-            code: /^[a-z]$/i.test(char)
+            code: /^[a-z]$/i.test(keyChar)
                 ? `Key${upper}`
                 : ''
         }
 
         const options = {
-            key: char,
+            key: keyChar,
             code: info.code,
             keyCode: info.keyCode,
             which: info.keyCode,
-            charCode: char.charCodeAt(0),
-            shiftKey: shiftChars.has(char) || /^[A-Z]$/.test(char)
+            charCode: keyChar.charCodeAt(0),
+            shiftKey: shiftChars.has(keyChar) || /^[A-Z]$/.test(keyChar)
         }
 
         target.dispatchEvent(
